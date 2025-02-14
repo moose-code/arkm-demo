@@ -105,89 +105,56 @@ ERC1967Proxy.Upgraded.handler(async ({ event, context }) => {
   context.ERC1967Proxy_Upgraded.set(entity);
 });
 
-const ARKM_WETH_POOL =
-  "0x9cB91e5451d29C84b51FFD40dF0b724b639bf841".toLowerCase();
-const USDC_ETH_POOL =
-  "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8".toLowerCase();
+// Constants section - group related constants together
+const POOL_ADDRESSES = {
+  ARKM_WETH: "0x9cB91e5451d29C84b51FFD40dF0b724b639bf841".toLowerCase(),
+  USDC_ETH: "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8".toLowerCase(),
+} as const;
+
+const DECIMALS = {
+  USDC: 6n,
+  ETH: 18n,
+  ARKM: 18n,
+} as const;
+
+const Q96 = 2n ** 96n;
 const LATEST_ETH_PRICE_ID = "latest";
 
-const USDC_DECIMALS = 6n;
-const ETH_DECIMALS = 18n;
-const ARKM_DECIMALS = 18n;
-
-const ARKM_IS_TOKEN0 = true; // We need to verify this from the pool contract
-
+// Price calculation functions
 function getArkmPrice(sqrtPriceX96: bigint): bigint {
-  const Q96 = 2n ** 96n;
-  console.log("sqrtPriceX96:", sqrtPriceX96);
-  console.log("Q96:", Q96);
-
-  // Scale up before division to maintain precision
-  const numerator = sqrtPriceX96 * sqrtPriceX96 * 10n ** ETH_DECIMALS;
-  console.log("Numerator:", numerator);
-
-  const denominator = Q96 * Q96;
-  console.log("Denominator:", denominator);
-
-  const price = numerator / denominator;
-  console.log("Final price:", price);
-
-  // If ARKM is token0, price = price
-  // If ARKM is token1, price = 1/price
-  if (ARKM_IS_TOKEN0) {
-    return price;
-  } else {
-    return 10n ** (2n * ETH_DECIMALS) / price;
-  }
+  // Calculate raw price from sqrt price
+  const numerator = sqrtPriceX96 * sqrtPriceX96 * 10n ** DECIMALS.ETH;
+  return numerator / (Q96 * Q96);
 }
 
 function getEthPrice(sqrtPriceX96: bigint): bigint {
-  const Q96 = 2n ** 96n;
-  // Calculate price = (sqrtPrice/2^96)^2
   const price = (sqrtPriceX96 * sqrtPriceX96) / (Q96 * Q96);
-
-  // Since USDC is token0 and ETH is token1, we need to take the reciprocal
-  const scale = 10n ** (USDC_DECIMALS + ETH_DECIMALS);
-  const priceUSD = scale / price;
-
-  // Return full precision
-  return priceUSD;
+  const scale = 10n ** (DECIMALS.USDC + DECIMALS.ETH);
+  return scale / price; // Reciprocal since USDC is token0
 }
-
-// Test with your value
-// const sqrtPriceX96 = 1522701130868960994505843776903710n;
-// const price = getEthPrice(sqrtPriceX96);
-// console.log("ETH price in USD (with 6 decimals):", price);
 
 UniswapV3Pool.Swap.handler(async ({ event, context }) => {
   const poolAddress = event.srcAddress.toLowerCase();
 
-  if (poolAddress === USDC_ETH_POOL) {
-    let price = getEthPrice(event.params.sqrtPriceX96);
-    console.log("ETH price in USD (with 6 decimals):", price);
+  if (poolAddress === POOL_ADDRESSES.USDC_ETH) {
+    const priceUSD = getEthPrice(event.params.sqrtPriceX96);
 
     const ethPrice: LatestETHPrice = {
       id: LATEST_ETH_PRICE_ID,
-      priceUSD: price,
+      priceUSD,
       timestamp: BigInt(event.block.timestamp),
     };
     context.LatestETHPrice.set(ethPrice);
-  } else if (poolAddress === ARKM_WETH_POOL) {
-    console.log("Processing ARKM/WETH swap");
-    console.log("sqrtPriceX96 from event:", event.params.sqrtPriceX96);
-
+  } else if (poolAddress === POOL_ADDRESSES.ARKM_WETH) {
     const arkmPriceETH = getArkmPrice(event.params.sqrtPriceX96);
-    console.log("Raw ARKM/ETH price:", arkmPriceETH);
 
-    // Get the latest ETH price
     const latestEthPrice = await context.LatestETHPrice.get(
       LATEST_ETH_PRICE_ID
     );
     if (!latestEthPrice) return;
 
-    // Calculate ARKM price in USD
     const arkmPriceUSD =
-      (arkmPriceETH * latestEthPrice.priceUSD) / 10n ** ETH_DECIMALS;
+      (arkmPriceETH * latestEthPrice.priceUSD) / 10n ** DECIMALS.ETH;
 
     const priceSnapshot: ARKMPriceSnapshot = {
       id: `${event.block.number}_${event.logIndex}`,
@@ -196,8 +163,6 @@ UniswapV3Pool.Swap.handler(async ({ event, context }) => {
       timestamp: BigInt(event.block.timestamp),
       blockNumber: BigInt(event.block.number),
     };
-    console.log("ARKM price in ETH:", arkmPriceETH);
-    console.log("ARKM price in USD:", arkmPriceUSD);
     context.ARKMPriceSnapshot.set(priceSnapshot);
   }
 });
