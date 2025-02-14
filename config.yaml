@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=./node_modules/envio/evm.schema.json
+name: envio-indexer
+networks:
+  - id: 1
+    # start_block: 17700000
+    start_block: 21800000
+    contracts:
+      - name: UniswapV3Pool
+        address:
+          - 0x9cB91e5451d29C84b51FFD40dF0b724b639bf841
+          - 0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8
+        handler: src/EventHandlers.ts
+        events:
+          - event: Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)
+      - name: ERC1967Proxy
+        address:
+          - 0x6E2a43be0B1d33b726f0CA3b8de60b3482b8b050
+        handler: src/EventHandlers.ts
+        events:
+          - event: AdminChanged(address previousAdmin, address newAdmin)
+          - event: Approval(address indexed owner, address indexed spender, uint256 value)
+          - event: BeaconUpgraded(address indexed beacon)
+          - event: Initialized(uint8 version)
+          - event: OwnershipTransferred(address indexed previousOwner, address indexed newOwner)
+          - event: Paused(address account)
+          - event: Transfer(address indexed from, address indexed to, uint256 value)
+          - event: Unpaused(address account)
+          - event: Upgraded(address indexed implementation)
+rollback_on_reorg: false
