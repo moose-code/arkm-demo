@@ -2,8 +2,8 @@
 name: envio-indexer
 networks:
   - id: 1
-    # start_block: 17700000
-    start_block: 21800000
+    start_block: 0
+    # start_block: 21800000
     contracts:
       - name: UniswapV3Pool
         address:

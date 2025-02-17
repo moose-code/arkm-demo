@@ -74,3 +74,34 @@ type ARKMPriceSnapshot {
   timestamp: BigInt!
   blockNumber: BigInt!
 }
+
+type ARKMPriceWindow @entity {
+  id: ID! # Format: WINDOW_TYPE_TIMESTAMP (e.g., "1m_1234567")
+  windowType: String! # "1m", "5m", "15m", "1h", "1d"
+  openPriceUSD: BigInt!
+  closePriceUSD: BigInt!
+  highPriceUSD: BigInt!
+  lowPriceUSD: BigInt!
+  openPriceETH: BigInt!
+  closePriceETH: BigInt!
+  highPriceETH: BigInt!
+  lowPriceETH: BigInt!
+  timestamp: BigInt! # Start of the window
+  endTimestamp: BigInt! # End of the window
+}
+
+type TokenHolder @entity {
+  id: ID! # Ethereum address of the holder
+  balance: BigInt! @index # Current token balance
+  totalSent: BigInt! # Total amount of tokens sent
+  totalReceived: BigInt! # Total amount of tokens received
+  lastTransactionTime: BigInt! # Timestamp of last transaction
+  transactionCount: BigInt! # Number of transactions (both sends and receives)
+}
+
+type TokenStatistics @entity {
+  id: ID! # Should be "current" - we'll only have one instance
+  totalHolders: BigInt! # Number of addresses with positive balance
+  totalSupply: BigInt! # Current total supply
+  totalTransfers: BigInt! # Total number of transfer transactions
+}

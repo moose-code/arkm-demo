@@ -77,14 +77,69 @@ ERC1967Proxy.Paused.handler(async ({ event, context }) => {
 });
 
 ERC1967Proxy.Transfer.handler(async ({ event, context }) => {
-  const entity: ERC1967Proxy_Transfer = {
+  const transferEntity: ERC1967Proxy_Transfer = {
     id: `${event.chainId}_${event.block.number}_${event.logIndex}`,
     from: event.params.from,
     to: event.params.to,
     value: event.params.value,
   };
+  context.ERC1967Proxy_Transfer.set(transferEntity);
 
-  context.ERC1967Proxy_Transfer.set(entity);
+  const timestamp = BigInt(event.block.timestamp);
+
+  // Update sender and receiver stats
+  if (event.params.from !== "0x0000000000000000000000000000000000000000") {
+    const existingFromHolder = await context.TokenHolder.get(
+      event.params.from.toLowerCase()
+    );
+    const fromHolder = {
+      id: event.params.from.toLowerCase(),
+      balance: (existingFromHolder?.balance || 0n) - event.params.value,
+      totalSent: (existingFromHolder?.totalSent || 0n) + event.params.value,
+      totalReceived: existingFromHolder?.totalReceived || 0n,
+      lastTransactionTime: timestamp,
+      transactionCount: (existingFromHolder?.transactionCount || 0n) + 1n,
+    };
+    context.TokenHolder.set(fromHolder);
+  }
+
+  if (event.params.to !== "0x0000000000000000000000000000000000000000") {
+    const existingToHolder = await context.TokenHolder.get(
+      event.params.to.toLowerCase()
+    );
+    const toHolder = {
+      id: event.params.to.toLowerCase(),
+      balance: (existingToHolder?.balance || 0n) + event.params.value,
+      totalSent: existingToHolder?.totalSent || 0n,
+      totalReceived:
+        (existingToHolder?.totalReceived || 0n) + event.params.value,
+      lastTransactionTime: timestamp,
+      transactionCount: (existingToHolder?.transactionCount || 0n) + 1n,
+    };
+    context.TokenHolder.set(toHolder);
+  }
+
+  // Update global statistics
+  const existingStats = await context.TokenStatistics.get(STATS_ID);
+  const stats = {
+    id: STATS_ID,
+    totalHolders: existingStats?.totalHolders || 0n,
+    totalSupply: existingStats?.totalSupply || 0n,
+    totalTransfers: (existingStats?.totalTransfers || 0n) + 1n,
+  };
+
+  // Adjust total supply
+  if (event.params.from === "0x0000000000000000000000000000000000000000") {
+    // Minting
+    stats.totalSupply += event.params.value;
+    stats.totalHolders += 1n;
+  } else if (event.params.to === "0x0000000000000000000000000000000000000000") {
+    // Burning
+    stats.totalSupply -= event.params.value;
+    stats.totalHolders -= 1n;
+  }
+
+  context.TokenStatistics.set(stats);
 });
 
 ERC1967Proxy.Unpaused.handler(async ({ event, context }) => {
@@ -120,6 +175,15 @@ const DECIMALS = {
 const Q96 = 2n ** 96n;
 const LATEST_ETH_PRICE_ID = "latest";
 
+// Add to constants section
+const WINDOW_TYPES = {
+  ONE_MIN: { type: "1m", seconds: 60n },
+  FIVE_MIN: { type: "5m", seconds: 300n },
+  FIFTEEN_MIN: { type: "15m", seconds: 900n },
+  ONE_HOUR: { type: "1h", seconds: 3600n },
+  ONE_DAY: { type: "1d", seconds: 86400n },
+} as const;
+
 // Price calculation functions
 function getArkmPrice(sqrtPriceX96: bigint): bigint {
   // Calculate raw price from sqrt price
@@ -131,6 +195,64 @@ function getEthPrice(sqrtPriceX96: bigint): bigint {
   const price = (sqrtPriceX96 * sqrtPriceX96) / (Q96 * Q96);
   const scale = 10n ** (DECIMALS.USDC + DECIMALS.ETH);
   return scale / price; // Reciprocal since USDC is token0
+}
+
+// Add helper function to get window start timestamp
+function getWindowStart(timestamp: bigint, windowSeconds: bigint): bigint {
+  return (timestamp / windowSeconds) * windowSeconds;
+}
+
+// Add function to update price windows
+async function updatePriceWindows(
+  context: any,
+  timestamp: bigint,
+  priceUSD: bigint,
+  priceETH: bigint
+) {
+  for (const window of Object.values(WINDOW_TYPES)) {
+    const windowStart = getWindowStart(timestamp, window.seconds);
+    const windowEnd = windowStart + window.seconds;
+    const windowId = `${window.type}_${windowStart}`;
+
+    // Try to get existing window
+    let priceWindow = await context.ARKMPriceWindow.get(windowId);
+
+    if (!priceWindow) {
+      // Create new window if it doesn't exist
+      priceWindow = {
+        id: windowId,
+        windowType: window.type,
+        openPriceUSD: priceUSD,
+        closePriceUSD: priceUSD,
+        highPriceUSD: priceUSD,
+        lowPriceUSD: priceUSD,
+        openPriceETH: priceETH,
+        closePriceETH: priceETH,
+        highPriceETH: priceETH,
+        lowPriceETH: priceETH,
+        timestamp: windowStart,
+        endTimestamp: windowEnd,
+      };
+    } else {
+      // Update existing window
+      priceWindow.closePriceUSD = priceUSD;
+      priceWindow.closePriceETH = priceETH;
+      priceWindow.highPriceUSD =
+        priceUSD > priceWindow.highPriceUSD
+          ? priceUSD
+          : priceWindow.highPriceUSD;
+      priceWindow.lowPriceUSD =
+        priceUSD < priceWindow.lowPriceUSD ? priceUSD : priceWindow.lowPriceUSD;
+      priceWindow.highPriceETH =
+        priceETH > priceWindow.highPriceETH
+          ? priceETH
+          : priceWindow.highPriceETH;
+      priceWindow.lowPriceETH =
+        priceETH < priceWindow.lowPriceETH ? priceETH : priceWindow.lowPriceETH;
+    }
+
+    context.ARKMPriceWindow.set(priceWindow);
+  }
 }
 
 UniswapV3Pool.Swap.handler(async ({ event, context }) => {
@@ -156,6 +278,7 @@ UniswapV3Pool.Swap.handler(async ({ event, context }) => {
     const arkmPriceUSD =
       (arkmPriceETH * latestEthPrice.priceUSD) / 10n ** DECIMALS.ETH;
 
+    // Create granular snapshot
     const priceSnapshot: ARKMPriceSnapshot = {
       id: `${event.block.number}_${event.logIndex}`,
       priceUSD: arkmPriceUSD,
@@ -164,5 +287,18 @@ UniswapV3Pool.Swap.handler(async ({ event, context }) => {
       blockNumber: BigInt(event.block.number),
     };
     context.ARKMPriceSnapshot.set(priceSnapshot);
+
+    // Update rolling windows
+    await updatePriceWindows(
+      context,
+      BigInt(event.block.timestamp),
+      arkmPriceUSD,
+      arkmPriceETH
+    );
   }
 });
+
+// Add these constants
+const STATS_ID = "current";
+const SECONDS_PER_DAY = 86400n;
+const SECONDS_PER_WEEK = SECONDS_PER_DAY * 7n;
